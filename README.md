@@ -34,3 +34,4 @@ To learn more, take a look at the following resources:
 
 <a href="https://v0.app/chat/api/kiro/clone/lucamacc/v0-3-d-configurator-with-threejs" alt="Open in Kiro"><img src="https://pdgvvgmkdvyeydso.public.blob.vercel-storage.com/open%20in%20kiro.svg?sanitize=true" /></a>
 # sandbox-three
+# sandbox-three
