@@ -26,45 +26,59 @@ export interface LightConfig {
   directionalIntensity: number
 }
 
-/** Methods the parent can call on the viewer */
+/** Set di texture PBR da poter sostituire dinamicamente */
+export interface TextureSet {
+  baseColorMap?: string;
+  normalMap?: string;
+  ormMap?: string;
+}
+
 export interface ViewerHandle {
   setNodeColor: (nodeId: string, color: string) => void
   resetNodeColor: (nodeId: string) => void
   highlightNode: (nodeId: string | null) => void
   updateLights: (config: LightConfig) => void
+  setModelVisibility: (modelSuffix: string, prefix: string) => void
+  setLogoVisibility: (modelSuffix: string, logoType: string, logoPosition: string, prefix: string) => void
+  setNodeTextures: (nodeId: string, textures: TextureSet) => Promise<void>
+}
+
+// Passiamo anche l'elenco di tutti i nomi dei nodi al genitore
+export interface SceneMetadata {
+  nodes: SceneNode[];
+  allNodeNames: string[];
 }
 
 interface ViewerProps {
   modelUrl: string | null
   fileMap: Map<string, string> | null
-  onSceneReady: (nodes: SceneNode[]) => void
+  onSceneReady: (metadata: SceneMetadata) => void
 }
 
 function LoadingOverlay() {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/80 z-10">
-      <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      <p className="text-sm text-muted-foreground font-sans">
-        Caricamento scena 3D...
-      </p>
-    </div>
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/80 z-10">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground font-sans">
+          Caricamento scena 3D...
+        </p>
+      </div>
   )
 }
 
 function EmptyState() {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none z-10">
-      <div className="flex flex-col items-center gap-2 opacity-50">
-        <MonitorCog className="h-12 w-12 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground font-sans">
-          Carica un modello GLTF/GLB per iniziare
-        </p>
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none z-10">
+        <div className="flex flex-col items-center gap-2 opacity-50">
+          <MonitorCog className="h-12 w-12 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground font-sans">
+            Carica un modello GLTF/GLB per iniziare
+          </p>
+        </div>
       </div>
-    </div>
   )
 }
 
-// We keep a map nodeId -> { mesh, originalColor } so we can mutate them
 type MeshRecord = {
   mesh: any
   originalColor: string
@@ -72,13 +86,12 @@ type MeshRecord = {
 }
 
 const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
-  { modelUrl, fileMap, onSceneReady },
-  ref
+    { modelUrl, fileMap, onSceneReady },
+    ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Mutable scene state that survives re-renders
   const stateRef = useRef<{
     renderer: any
     scene: any
@@ -107,59 +120,114 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
     highlightedId: null,
   })
 
-  const [rendererType, setRendererType] = useState<
-    "webgpu" | "webgl" | "loading"
-  >("loading")
+  const [rendererType, setRendererType] = useState<"webgpu" | "webgl" | "loading">("loading")
   const [ready, setReady] = useState(false)
   const [modelLoading, setModelLoading] = useState(false)
 
-  // Expose imperative methods to parent
   useImperativeHandle(
-    ref,
-    () => ({
-      setNodeColor(nodeId: string, color: string) {
-        const record = stateRef.current.meshMap.get(nodeId)
-        if (!record) return
-        record.mesh.material.color.set(color)
-      },
-      resetNodeColor(nodeId: string) {
-        const record = stateRef.current.meshMap.get(nodeId)
-        if (!record) return
-        record.mesh.material.color.set(record.originalColor)
-      },
-      highlightNode(nodeId: string | null) {
-        const state = stateRef.current
-        // Remove previous highlight
-        if (state.highlightedId) {
-          const prev = state.meshMap.get(state.highlightedId)
-          if (prev && prev.mesh.material.emissive) {
-            prev.mesh.material.emissive.set(prev.originalEmissive)
+      ref,
+      () => ({
+        setNodeColor(nodeId: string, color: string) {
+          const record = stateRef.current.meshMap.get(nodeId)
+          if (!record) return
+          record.mesh.material.color.set(color)
+        },
+        resetNodeColor(nodeId: string) {
+          const record = stateRef.current.meshMap.get(nodeId)
+          if (!record) return
+          record.mesh.material.color.set(record.originalColor)
+        },
+        highlightNode(nodeId: string | null) {
+          const state = stateRef.current
+          if (state.highlightedId) {
+            const prev = state.meshMap.get(state.highlightedId)
+            if (prev && prev.mesh.material.emissive) {
+              prev.mesh.material.emissive.set(prev.originalEmissive)
+            }
           }
-        }
-        state.highlightedId = nodeId
-        if (nodeId) {
+          state.highlightedId = nodeId
+          if (nodeId) {
+            const record = state.meshMap.get(nodeId)
+            if (record && record.mesh.material.emissive) {
+              record.mesh.material.emissive.set("#222244")
+            }
+          }
+        },
+        updateLights(config: LightConfig) {
+          const state = stateRef.current
+          if (state.ambientLight) {
+            state.ambientLight.color.set(config.ambientColor)
+            state.ambientLight.intensity = config.ambientIntensity
+          }
+          if (state.directionalLight) {
+            state.directionalLight.color.set(config.directionalColor)
+            state.directionalLight.intensity = config.directionalIntensity
+          }
+        },
+        // Nasconde/Mostra i modelli basandosi su un prefisso passato dal genitore
+        setModelVisibility(modelSuffix: string, prefix: string) {
+          const state = stateRef.current
+          if (!state.currentModel) return
+
+          state.currentModel.traverse((node: any) => {
+            if (node.name && node.name.startsWith(prefix)) {
+              node.visible = node.name.endsWith(modelSuffix)
+            }
+          })
+        },
+        // Gestisce la visibilità dinamica dei loghi
+        setLogoVisibility(modelSuffix: string, logoType: string, logoPosition: string, prefix: string) {
+          const state = stateRef.current
+          if (!state.currentModel) return
+
+          const targetLogoName = `${prefix}${logoType}_${logoPosition}_grp_${modelSuffix}`
+
+          state.currentModel.traverse((node: any) => {
+            if (
+                node.name &&
+                node.name.startsWith(prefix) &&
+                node.name.includes(`_grp_${modelSuffix}`)
+            ) {
+              node.visible = (node.name === targetLogoName)
+            }
+          })
+        },
+        async setNodeTextures(nodeId: string, textures: TextureSet) {
+          const state = stateRef.current
           const record = state.meshMap.get(nodeId)
-          if (record && record.mesh.material.emissive) {
-            record.mesh.material.emissive.set("#222244")
+          if (!record || !record.mesh.material) return
+
+          const THREE = await import("three")
+          const textureLoader = new THREE.TextureLoader()
+          const material = record.mesh.material
+
+          if (textures.baseColorMap) {
+            const map = await textureLoader.loadAsync(textures.baseColorMap)
+            map.flipY = false
+            map.colorSpace = THREE.SRGBColorSpace
+            material.map = map
           }
+
+          if (textures.normalMap) {
+            const normalMap = await textureLoader.loadAsync(textures.normalMap)
+            normalMap.flipY = false
+            material.normalMap = normalMap
+          }
+
+          if (textures.ormMap) {
+            const ormMap = await textureLoader.loadAsync(textures.ormMap)
+            ormMap.flipY = false
+            material.aoMap = ormMap
+            material.roughnessMap = ormMap
+            material.metalnessMap = ormMap
+          }
+
+          material.needsUpdate = true
         }
-      },
-      updateLights(config: LightConfig) {
-        const state = stateRef.current
-        if (state.ambientLight) {
-          state.ambientLight.color.set(config.ambientColor)
-          state.ambientLight.intensity = config.ambientIntensity
-        }
-        if (state.directionalLight) {
-          state.directionalLight.color.set(config.directionalColor)
-          state.directionalLight.intensity = config.directionalIntensity
-        }
-      },
-    }),
-    []
+      }),
+      []
   )
 
-  // Initialize the 3D scene
   useEffect(() => {
     const canvas = canvasRef.current
     const container = containerRef.current
@@ -167,7 +235,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
 
     const state = stateRef.current
     state.disposed = false
-
     let resizeObserver: ResizeObserver | null = null
 
     async function init() {
@@ -178,19 +245,16 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
       const width = container!.clientWidth
       const height = container!.clientHeight
 
-      // Create scene
       const scene = new THREE.Scene()
       scene.background = new THREE.Color("#1a1a2e")
       scene.fog = new THREE.Fog("#1a1a2e", 15, 30)
       state.scene = scene
 
-      // Create camera
       const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100)
       camera.position.set(4, 3, 6)
       camera.lookAt(0, 0, 0)
       state.camera = camera
 
-      // Create renderer - try WebGPU first, fallback to WebGL
       let renderer: any = null
       let isWebGPU = false
 
@@ -206,9 +270,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
             await renderer.init()
             isWebGPU = true
           }
-        } catch {
-          renderer = null
-        }
+        } catch { renderer = null }
       }
 
       if (!renderer && !state.disposed) {
@@ -230,7 +292,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
 
       setRendererType(isWebGPU ? "webgpu" : "webgl")
 
-      // Lights
       const ambient = new THREE.AmbientLight(0xffffff, 0.6)
       scene.add(ambient)
       state.ambientLight = ambient
@@ -245,15 +306,11 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
       dirLight2.position.set(-3, 4, -5)
       scene.add(dirLight2)
 
-      // Grid
       const grid = new THREE.GridHelper(20, 40, 0x333344, 0x222233)
       grid.position.y = -0.01
       scene.add(grid)
 
-      // OrbitControls
-      const { OrbitControls } = await import(
-        "three/examples/jsm/controls/OrbitControls.js"
-      )
+      const { OrbitControls } = await import("three/examples/jsm/controls/OrbitControls.js")
       if (state.disposed) return
 
       const controls = new OrbitControls(camera, canvas!)
@@ -264,7 +321,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
       controls.maxPolarAngle = Math.PI / 2 - 0.05
       state.controls = controls
 
-      // Placeholder torus knot
       const torusGeo = new THREE.TorusKnotGeometry(1, 0.35, 128, 32)
       const torusMat = new THREE.MeshStandardMaterial({
         color: 0x4a7dff,
@@ -275,7 +331,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
       scene.add(placeholder)
       state.placeholderMesh = placeholder
 
-      // Animation loop
       function animate() {
         if (state.disposed) return
         state.frame = requestAnimationFrame(animate)
@@ -287,7 +342,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
       }
       animate()
 
-      // Resize
       const handleResize = () => {
         if (state.disposed || !container) return
         const w = container.clientWidth
@@ -320,7 +374,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
     }
   }, [])
 
-  // Load model when modelUrl changes
   const loadModel = useCallback(async () => {
     const state = stateRef.current
     if (!modelUrl || !state.scene) return
@@ -329,14 +382,9 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
 
     try {
       const THREE = await import("three")
-      const { GLTFLoader } = await import(
-        "three/examples/jsm/loaders/GLTFLoader.js"
-      )
-      const { DRACOLoader } = await import(
-        "three/examples/jsm/loaders/DRACOLoader.js"
-      )
+      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js")
+      const { DRACOLoader } = await import("three/examples/jsm/loaders/DRACOLoader.js")
 
-      // Custom LoadingManager that resolves relative paths via fileMap
       const manager = new THREE.LoadingManager()
 
       if (fileMap && fileMap.size > 0) {
@@ -352,16 +400,13 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
 
       const loader = new GLTFLoader(manager)
       const dracoLoader = new DRACOLoader()
-      dracoLoader.setDecoderPath(
-        "https://www.gstatic.com/draco/versioned/decoders/1.5.7/"
-      )
+      dracoLoader.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.7/")
       loader.setDRACOLoader(dracoLoader)
 
       const gltf = await new Promise<any>((resolve, reject) => {
         loader.load(modelUrl, resolve, undefined, reject)
       })
 
-      // Remove placeholder
       if (state.placeholderMesh) {
         state.scene.remove(state.placeholderMesh)
         state.placeholderMesh.geometry?.dispose()
@@ -369,15 +414,12 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
         state.placeholderMesh = null
       }
 
-      // Remove previous model
       if (state.currentModel) {
         state.scene.remove(state.currentModel)
         state.currentModel.traverse((child: any) => {
           if (child.geometry) child.geometry.dispose()
           if (child.material) {
-            const mats = Array.isArray(child.material)
-              ? child.material
-              : [child.material]
+            const mats = Array.isArray(child.material) ? child.material : [child.material]
             mats.forEach((m: any) => m.dispose())
           }
         })
@@ -386,7 +428,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
 
       const model = gltf.scene
 
-      // Center and scale
       const box = new THREE.Box3().setFromObject(model)
       const size = box.getSize(new THREE.Vector3())
       const center = box.getCenter(new THREE.Vector3())
@@ -397,27 +438,25 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
       model.position.y = -box.min.y * scale
       model.position.z = -center.z * scale
 
-      // Traverse model: enable shadows, collect all mesh nodes, clone materials
       const sceneNodes: SceneNode[] = []
+      const allNodeNames: string[] = []
       let meshIndex = 0
 
       model.traverse((child: any) => {
+        if (child.name) allNodeNames.push(child.name) // Salviamo i nomi per l'analisi dinamica
+
         if (child.isMesh) {
           child.castShadow = true
           child.receiveShadow = true
 
-          // Clone material so each mesh has its own editable copy
           if (child.material) {
             child.material = child.material.clone()
           }
 
           const id = `mesh_${meshIndex++}`
           const mat = child.material
-          const colorHex = mat.color
-            ? "#" + mat.color.getHexString()
-            : "#ffffff"
-          const emissiveHex =
-            mat.emissive ? "#" + mat.emissive.getHexString() : "#000000"
+          const colorHex = mat.color ? "#" + mat.color.getHexString() : "#ffffff"
+          const emissiveHex = mat.emissive ? "#" + mat.emissive.getHexString() : "#000000"
 
           state.meshMap.set(id, {
             mesh: child,
@@ -436,9 +475,10 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
 
       state.scene.add(model)
       state.currentModel = model
-      onSceneReady(sceneNodes)
 
-      // Reset camera
+      // Passiamo anche l'array di tutti i nomi per poterli estrarre in page.tsx
+      onSceneReady({ nodes: sceneNodes, allNodeNames })
+
       if (state.controls) {
         state.controls.target.set(0, (size.y * scale) / 2, 0)
         state.controls.update()
@@ -457,40 +497,40 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(
   }, [ready, modelUrl, loadModel])
 
   return (
-    <div ref={containerRef} className="relative h-full w-full bg-background">
-      <canvas ref={canvasRef} className="h-full w-full block" />
+      <div ref={containerRef} className="relative h-full w-full bg-background">
+        <canvas ref={canvasRef} className="h-full w-full block" />
 
-      {!ready && <LoadingOverlay />}
+        {!ready && <LoadingOverlay />}
 
-      {modelLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/60 z-10">
-          <div className="flex items-center gap-3 rounded-lg bg-card px-4 py-3 shadow-lg">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <span className="text-sm text-foreground font-sans">
+        {modelLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-background/60 z-10">
+              <div className="flex items-center gap-3 rounded-lg bg-card px-4 py-3 shadow-lg">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                <span className="text-sm text-foreground font-sans">
               Caricamento modello...
             </span>
-          </div>
-        </div>
-      )}
+              </div>
+            </div>
+        )}
 
-      {/* Renderer Badge */}
-      <div className="absolute bottom-3 left-3 flex items-center gap-2 z-10">
-        <div
-          className={`h-2 w-2 rounded-full ${
-            rendererType === "webgpu"
-              ? "bg-emerald-400"
-              : rendererType === "webgl"
-                ? "bg-amber-400"
-                : "bg-muted-foreground animate-pulse"
-          }`}
-        />
-        <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+        {/* Renderer Badge */}
+        <div className="absolute bottom-3 left-3 flex items-center gap-2 z-10">
+          <div
+              className={`h-2 w-2 rounded-full ${
+                  rendererType === "webgpu"
+                      ? "bg-emerald-400"
+                      : rendererType === "webgl"
+                          ? "bg-amber-400"
+                          : "bg-muted-foreground animate-pulse"
+              }`}
+          />
+          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
           {rendererType === "loading" ? "Detecting..." : rendererType}
         </span>
-      </div>
+        </div>
 
-      {!modelUrl && ready && !modelLoading && <EmptyState />}
-    </div>
+        {!modelUrl && ready && !modelLoading && <EmptyState />}
+      </div>
   )
 })
 

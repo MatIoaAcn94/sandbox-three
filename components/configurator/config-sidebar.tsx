@@ -1,5 +1,7 @@
 "use client"
 
+import { useMemo, useRef, useState } from "react"
+
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -11,8 +13,9 @@ import {
 import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
 import ModelUploader from "./model-uploader"
-import { Paintbrush, Layers, Sun, Box, RotateCcw } from "lucide-react"
+import { Paintbrush, Layers, Sun, Box, RotateCcw, Mic, MicOff, Send } from "lucide-react"
 import type { SceneNode, LightConfig } from "./viewer-3d"
+import { resolveColorCommand } from "@/lib/openai-color-command"
 
 /** A group of nodes sharing the same materialName */
 interface NodeGroup {
@@ -65,7 +68,127 @@ export default function ConfigSidebar({
   lightConfig,
   onLightChange,
 }: ConfigSidebarProps) {
+  const [openAiApiKey, setOpenAiApiKey] = useState("sk-proj-your-openai-key")
+  const [chatPrompt, setChatPrompt] = useState("")
+  const [assistantStatus, setAssistantStatus] = useState<string | null>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const recognitionRef = useRef<any>(null)
+
   const groups = buildGroups(sceneNodes)
+  const groupLabelList = useMemo(
+    () => groups.map((group) => group.materialName),
+    [groups]
+  )
+
+  const findGroupFromLabel = (label: string): NodeGroup | null => {
+    const normalized = label.trim().toLowerCase()
+    if (!normalized) return null
+
+    const exact = groups.find((group) => group.materialName.toLowerCase() === normalized)
+    if (exact) return exact
+
+    const contains = groups.find((group) =>
+      group.materialName.toLowerCase().includes(normalized)
+    )
+    if (contains) return contains
+
+    return (
+      groups.find((group) => normalized.includes(group.materialName.toLowerCase())) || null
+    )
+  }
+
+  const runPrompt = async (prompt: string) => {
+    if (!prompt.trim()) {
+      setAssistantStatus("Inserisci una richiesta testuale.")
+      return
+    }
+
+    if (!openAiApiKey.trim()) {
+      setAssistantStatus("Inserisci una OpenAI API key valida.")
+      return
+    }
+
+    if (groups.length === 0) {
+      setAssistantStatus("Carica un modello prima di usare la chat AI.")
+      return
+    }
+
+    try {
+      setIsProcessing(true)
+      setAssistantStatus("Sto elaborando la richiesta...")
+
+      const command = await resolveColorCommand({
+        apiKey: openAiApiKey,
+        userMessage: prompt,
+        labels: groupLabelList,
+      })
+
+      const matchedGroup = findGroupFromLabel(command.targetLabel)
+      if (!matchedGroup) {
+        setAssistantStatus(`Nessuna corrispondenza trovata per: ${command.targetLabel}`)
+        return
+      }
+
+      onChangeGroupColor(matchedGroup.nodeIds, command.color)
+      onSelectGroup(matchedGroup.materialName)
+      setAssistantStatus(
+        `Aggiornato "${matchedGroup.materialName}" con il colore ${command.color}`
+      )
+    } catch (error) {
+      setAssistantStatus(
+        error instanceof Error ? error.message : "Errore durante la chiamata OpenAI"
+      )
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const toggleVoice = () => {
+    const SpeechRecognitionApi =
+      typeof window !== "undefined"
+        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        : undefined
+
+    if (!SpeechRecognitionApi) {
+      setAssistantStatus("Riconoscimento vocale non supportato in questo browser.")
+      return
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop()
+      setIsListening(false)
+      return
+    }
+
+    const recognition = new SpeechRecognitionApi()
+    recognition.lang = "en-US"
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0]?.[0]?.transcript?.trim() ?? ""
+      if (transcript) {
+        setChatPrompt(transcript)
+        void runPrompt(transcript)
+      }
+    }
+
+    recognition.onerror = () => {
+      setAssistantStatus("Errore durante l'acquisizione vocale.")
+      setIsListening(false)
+    }
+
+    recognition.onend = () => {
+      setIsListening(false)
+    }
+
+    recognitionRef.current = recognition
+    recognition.start()
+    setIsListening(true)
+    setAssistantStatus("Ascolto attivo... premi di nuovo il microfono per fermare.")
+  }
+
   const selectedGroup = groups.find((g) => g.materialName === selectedGroupName) || null
   const uniqueGroupCount = groups.length
 
@@ -89,6 +212,66 @@ export default function ConfigSidebar({
       <ScrollArea className="flex-1 min-h-0 overflow-hidden">
         <div className="flex flex-col gap-1 p-4">
           {/* Upload Section */}
+          <div className="rounded-lg border border-border bg-secondary/20 p-3 space-y-2">
+            <label className="block text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+              OpenAI API Key
+            </label>
+            <input
+              type="text"
+              value={openAiApiKey}
+              onChange={(e) => setOpenAiApiKey(e.target.value)}
+              placeholder="sk-proj-..."
+              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+
+            <label className="block text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+              Prompt colore
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={chatPrompt}
+                onChange={(e) => setChatPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void runPrompt(chatPrompt)
+                  }
+                }}
+                placeholder='Es: "make the tires red"'
+                className="flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <button
+                onClick={() => void runPrompt(chatPrompt)}
+                disabled={isProcessing}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:opacity-50"
+                title="Invia prompt"
+              >
+                <Send className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={toggleVoice}
+                className={`inline-flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors ${
+                  isListening
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-foreground hover:bg-accent"
+                }`}
+                title={isListening ? "Ferma registrazione" : "Avvia registrazione"}
+              >
+                {isListening ? (
+                  <MicOff className="h-3.5 w-3.5" />
+                ) : (
+                  <Mic className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </div>
+
+            {assistantStatus && (
+              <p className="text-[10px] text-muted-foreground">{assistantStatus}</p>
+            )}
+          </div>
+
+          <Separator className="my-3" />
+
           <div className="mb-2">
             <label className="mb-2 block text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
               Modello
