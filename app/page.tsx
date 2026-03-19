@@ -150,15 +150,37 @@ export default function ConfiguratorPage() {
         const newTexture = e.target.value
         setLeatherType(newTexture)
 
-        if (viewerRef.current) {
+        if (viewerRef.current && fileMap) {
             const leatherNodes = sceneNodes.filter(n => n.materialName === NAMING_CONFIG.leatherMaterialName)
 
-            const textures = {
-                baseColorMap: `${NAMING_CONFIG.textureBasePath}${newTexture}.jpg`
+            // Cerca tutte le texture nel fileMap invece che in percorsi locali
+            const baseColorFileName = `M7Y8_Pelle_BC_${newTexture}.jpg`
+            const normalFileName = `M7Y8_Pelle_N.jpg`
+            const ormFileName = `M7Y8_Pelle_ORM.jpg`
+
+            const textures: any = {}
+
+            const baseColorMapUrl = fileMap.get(baseColorFileName)
+            if (baseColorMapUrl) {
+                textures.baseColorMap = baseColorMapUrl
             }
 
-            for (const node of leatherNodes) {
-                await viewerRef.current.setNodeTextures(node.id, textures)
+            const normalMapUrl = fileMap.get(normalFileName)
+            if (normalMapUrl) {
+                textures.normalMap = normalMapUrl
+            }
+
+            const ormMapUrl = fileMap.get(ormFileName)
+            if (ormMapUrl) {
+                textures.ormMap = ormMapUrl
+            }
+
+            if (Object.keys(textures).length > 0) {
+                for (const node of leatherNodes) {
+                    await viewerRef.current.setNodeTextures(node.id, textures)
+                }
+            } else {
+                console.warn(`No textures found for ${newTexture} in uploaded files`)
             }
         }
     }
